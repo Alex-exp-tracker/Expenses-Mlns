@@ -1,5 +1,5 @@
 {
-  "next_id": 7,
+  "next_id": 8,
   "expenses": [
     {
       "id": 1,
@@ -90,6 +90,20 @@
       "unit": "EUR",
       "shares": {},
       "date": "2025-11-18"
+    },
+    {
+      "id": 7,
+      "amount": 2.0,
+      "payer": "Alessio",
+      "participants": [
+        "Alessio",
+        "Morgan"
+      ],
+      "category": "MiniM",
+      "description": "",
+      "unit": "EUR",
+      "shares": {},
+      "date": "2026-02-16"
     }
   ],
   "categories": [

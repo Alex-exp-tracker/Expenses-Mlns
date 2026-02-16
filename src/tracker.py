@@ -20,6 +20,14 @@ import tempfile
 import shutil
 import logging
 
+# Optional Google Sheets backend imports are lazy/optional; we try to use them
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+except Exception:
+    gspread = None
+    Credentials = None
+
 # location of the JSON persistence file (relative to src/)
 DATA_FILE = os.path.join(os.path.dirname(__file__), "..", "data", "expenses_data.json")
 
@@ -49,6 +57,8 @@ class ExpenseTracker:
         # next id for new expenses
         self._next_id = 1
         # load persisted state (if any)
+        # initialize Google Sheets backend (if configured)
+        self._gs_backend = GoogleSheetsBackend() if "GoogleSheetsBackend" in globals() else None
         self.load()
 
     def add_expense(
@@ -142,12 +152,26 @@ class ExpenseTracker:
         Persist tracker state as JSON atomically.
         Logs the target path so we can verify the file being written.
         """
-        os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
         data = {
             "next_id": self._next_id,
             "expenses": [e.to_dict() for e in self.expenses],
             "categories": self.categories,
         }
+
+        # If Google Sheets backend is configured and available, use it.
+        try:
+            if getattr(self, "_gs_backend", None) and self._gs_backend.available:
+                logger.info("Saving data to Google Sheets (expenses=%d)", len(self.expenses))
+                ok = self._gs_backend.save_state(data)
+                if ok:
+                    return
+                else:
+                    logger.warning("Google Sheets save failed, falling back to local JSON")
+        except Exception:
+            logger.exception("Error while attempting to save to Google Sheets; falling back to local JSON")
+
+        # Fallback to local JSON file
+        os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
         target = os.path.abspath(DATA_FILE)
         logger.info(f"Saving data to {target} (expenses={len(self.expenses)})")
         # atomic write: write to temp file then move
@@ -176,17 +200,30 @@ class ExpenseTracker:
         After loading we reindex expenses sequentially and update _next_id so
         numbering is always contiguous (1..n).
         """
-        if not os.path.exists(DATA_FILE):
-            return
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        # build Expense objects from file
+        # Try Google Sheets backend first
+        try:
+            if getattr(self, "_gs_backend", None) and self._gs_backend.available:
+                logger.info("Loading data from Google Sheets")
+                data = self._gs_backend.load_state() or {}
+            else:
+                data = None
+        except Exception:
+            logger.exception("Error loading from Google Sheets, falling back to local JSON")
+            data = None
+
+        if not data:
+            if not os.path.exists(DATA_FILE):
+                return
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+        # build Expense objects from data
         self.expenses = [Expense.from_dict(d) for d in data.get("expenses", [])]
         # reindex sequential ids to ensure consistent numbering
         for idx, exp in enumerate(self.expenses, start=1):
             exp.id = idx
         # set next id to len + 1 (so next add continues sequence)
-        self._next_id = len(self.expenses) + 1
+        self._next_id = int(data.get("next_id", len(self.expenses) + 1))
         # restore categories (keep defaults if missing)
         self.categories = data.get("categories", []) or list(DEFAULT_CATEGORIES)
 
